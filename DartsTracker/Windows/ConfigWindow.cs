@@ -3,7 +3,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 
-namespace SamplePlugin.Windows;
+namespace DartsTracker.Windows;
 
 public class ConfigWindow : Window, IDisposable
 {
@@ -12,12 +12,12 @@ public class ConfigWindow : Window, IDisposable
     // We give this window a constant ID using ###.
     // This allows for labels to be dynamic, like "{FPS Counter}fps###XYZ counter window",
     // and the window ID will always be "###XYZ counter window" for ImGui
-    public ConfigWindow(Plugin plugin) : base("A Wonderful Configuration Window###With a constant ID")
+    public ConfigWindow(Plugin plugin) : base("Darts Tracker Configuration###DartsTrackerConfig")
     {
         Flags = ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar |
                 ImGuiWindowFlags.NoScrollWithMouse;
 
-        Size = new Vector2(232, 90);
+        Size = new Vector2(280, 180);
         SizeCondition = ImGuiCond.Always;
 
         configuration = plugin.Configuration;
@@ -40,15 +40,28 @@ public class ConfigWindow : Window, IDisposable
 
     public override void Draw()
     {
-        // Can't ref a property, so use a local copy
-        var configValue = configuration.SomePropertyToBeSavedAndWithADefault;
-        if (ImGui.Checkbox("Random Config Bool", ref configValue))
+        ImGui.TextUnformatted("Game Settings:");
+        ImGui.Separator();
+        
+        var rounds = configuration.RoundsPerGame;
+        if (ImGui.SliderInt("Rounds per Game", ref rounds, 1, 10))
         {
-            configuration.SomePropertyToBeSavedAndWithADefault = configValue;
-            // Can save immediately on change if you don't want to provide a "Save and Close" button
+            configuration.RoundsPerGame = rounds;
             configuration.Save();
         }
-
+        
+        var autoStart = configuration.AutoStartGame;
+        if (ImGui.Checkbox("Auto-start game on first player", ref autoStart))
+        {
+            configuration.AutoStartGame = autoStart;
+            configuration.Save();
+        }
+        
+        
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Window Settings:");
+        ImGui.Separator();
+        
         var movable = configuration.IsConfigWindowMovable;
         if (ImGui.Checkbox("Movable Config Window", ref movable))
         {

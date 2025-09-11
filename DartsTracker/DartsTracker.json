@@ -1,0 +1,13 @@
+{
+  "Author": "your name here",
+  "Name": "Darts Tracker",
+  "Punchline": "Track your darts game scores and statistics.",
+  "Description": "Track and analyze your darts game performance. Use /darts to open the tracker interface.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "darts",
+    "tracker",
+    "game",
+    "score"
+  ]
+}
