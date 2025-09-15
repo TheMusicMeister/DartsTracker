@@ -10,7 +10,12 @@ public class Configuration : IPluginConfiguration
 
     public bool IsConfigWindowMovable { get; set; } = true;
     public int RoundsPerGame { get; set; } = 5;
-    public bool AutoStartGame { get; set; } = true;
+    public int ChatMessageDelayMs { get; set; } = 1000;
+    public MatchHistoryData MatchHistory { get; set; } = new();
+    
+    // Development settings (not saved/persistent)
+    [NonSerialized]
+    public bool DevMode = false;
 
     // The below exist just to make saving less cumbersome
     public void Save()

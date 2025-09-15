@@ -11,6 +11,16 @@ namespace DartsTracker.Windows;
 public class MainWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
+    private string newPlayerName = "";
+    
+    // Throw editing state
+    private bool showThrowEditWindow = false;
+    private string editingPlayerName = "";
+    private int editingRoundNumber = 0;
+    private int editingThrowNumber = 0;
+    private int editRoll1 = 1;
+    private int editRoll2 = 1;
+    private int editRoll3 = 1;
 
     public MainWindow(Plugin plugin, string goatImagePath)
         : base("Darts League Tracker##DartsTrackerMain", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -45,17 +55,33 @@ public class MainWindow : Window, IDisposable
         {
             DrawWaitingState();
         }
+        
+        // Draw throw editing popup
+        if (showThrowEditWindow)
+        {
+            DrawThrowEditWindow();
+        }
     }
     
     private void DrawGameControls()
     {
         if (plugin.CurrentGame?.IsActive == true)
         {
-            ImGui.TextUnformatted($"Game Active - {plugin.CurrentGame.TotalRounds} rounds");
+            var game = plugin.CurrentGame;
+            ImGui.TextUnformatted($"Game Active - {game.TotalRounds} rounds");
+            
+            // Show turn information
+            var currentTurnPlayer = game.GetCurrentTurnPlayer();
+            if (currentTurnPlayer != null)
+            {
+                ImGui.SameLine();
+                ImGui.TextUnformatted($"| Turn: {currentTurnPlayer} (Throw {game.CurrentThrowInTurn + 1}/3)");
+            }
+            
             if (plugin.CurrentTrackedPlayer != null)
             {
                 ImGui.SameLine();
-                ImGui.TextUnformatted($"| Tracking: {plugin.CurrentTrackedPlayer} ({plugin.CurrentDiceRolls.Count}/3)");
+                ImGui.TextUnformatted($"| Rolling: {plugin.CurrentTrackedPlayer} ({plugin.CurrentDiceRolls.Count}/3)");
             }
             
             if (ImGui.Button("End Game"))
@@ -67,14 +93,144 @@ public class MainWindow : Window, IDisposable
             {
                 plugin.ResetGame();
             }
+            
+            // Show archive button if game is completed
+            if (game.IsGameComplete)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button("Archive Game"))
+                {
+                    plugin.ArchiveGame();
+                }
+                
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.BeginTooltip();
+                    ImGui.TextUnformatted("Save this completed game to history");
+                    ImGui.EndTooltip();
+                }
+            }
+            
+            // Announcement buttons
+            ImGui.Spacing();
+            ImGui.TextUnformatted("Announcements:");
+            
+            // Turn Order button
+            var canAnnounceTurnOrder = game.PlayerOrder.Count > 0;
+            if (!canAnnounceTurnOrder) ImGui.BeginDisabled();
+            
+            if (ImGui.Button("Turn Order"))
+            {
+                plugin.AnnounceTurnOrder();
+            }
+            
+            if (!canAnnounceTurnOrder) ImGui.EndDisabled();
+            
+            if (ImGui.IsItemHovered(canAnnounceTurnOrder ? ImGuiHoveredFlags.None : ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.BeginTooltip();
+                if (canAnnounceTurnOrder)
+                {
+                    ImGui.TextUnformatted("Announce the turn order to party chat");
+                }
+                else
+                {
+                    ImGui.TextUnformatted("No players in the game yet");
+                }
+                ImGui.EndTooltip();
+            }
+            
+            // Current Turn button
+            ImGui.SameLine();
+            var canAnnounceCurrentTurn = game.GetCurrentTurnPlayer() != null;
+            if (!canAnnounceCurrentTurn) ImGui.BeginDisabled();
+            
+            if (ImGui.Button("Current Turn"))
+            {
+                plugin.AnnounceCurrentTurn();
+            }
+            
+            if (!canAnnounceCurrentTurn) ImGui.EndDisabled();
+            
+            if (ImGui.IsItemHovered(canAnnounceCurrentTurn ? ImGuiHoveredFlags.None : ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.BeginTooltip();
+                if (canAnnounceCurrentTurn)
+                {
+                    ImGui.TextUnformatted("Announce whose turn it is to party chat");
+                }
+                else
+                {
+                    ImGui.TextUnformatted("No players in the game yet");
+                }
+                ImGui.EndTooltip();
+            }
+            
+            // Scores button (available when not in middle of round)
+            ImGui.SameLine();
+            var canAnnounceScores = plugin.CanAnnounceScores();
+            if (!canAnnounceScores) ImGui.BeginDisabled();
+            
+            if (ImGui.Button("Scores"))
+            {
+                plugin.AnnounceCurrentScores();
+            }
+            
+            if (!canAnnounceScores) ImGui.EndDisabled();
+            
+            if (ImGui.IsItemHovered(canAnnounceScores ? ImGuiHoveredFlags.None : ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.BeginTooltip();
+                if (canAnnounceScores)
+                {
+                    ImGui.TextUnformatted("Announce current standings to party chat");
+                }
+                else if (game.Players.Count == 0)
+                {
+                    ImGui.TextUnformatted("No players in the game yet");
+                }
+                else
+                {
+                    ImGui.TextUnformatted("Cannot announce scores while players are in the middle of a round");
+                }
+                ImGui.EndTooltip();
+            }
+            
+            // Turn progression controls
+            ImGui.Spacing();
+            ImGui.TextUnformatted("Turn Control:");
+            
+            // Next Player button
+            var canAdvanceTurn = plugin.CanAdvanceTurn();
+            if (!canAdvanceTurn) ImGui.BeginDisabled();
+            
+            if (ImGui.Button("Next Player"))
+            {
+                plugin.AdvanceToNextPlayer();
+            }
+            
+            if (!canAdvanceTurn) ImGui.EndDisabled();
+            
+            if (ImGui.IsItemHovered(canAdvanceTurn ? ImGuiHoveredFlags.None : ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.BeginTooltip();
+                if (canAdvanceTurn)
+                {
+                    ImGui.TextUnformatted("Advance to the next player's turn");
+                }
+                else
+                {
+                    ImGui.TextUnformatted("Current player must complete all 3 throws before advancing");
+                }
+                ImGui.EndTooltip();
+            }
         }
         else
         {
             ImGui.TextUnformatted("No active game");
-            if (ImGui.Button("Start New Game"))
-            {
-                plugin.StartNewGame();
-            }
+            
+            // Player setup section
+            DrawManualPlayerSetup();
         }
         
         ImGui.SameLine();
@@ -82,17 +238,171 @@ public class MainWindow : Window, IDisposable
         {
             plugin.ToggleConfigUi();
         }
+        
+        ImGui.SameLine();
+        if (ImGui.Button("History"))
+        {
+            plugin.ToggleHistoryUi();
+        }
+        
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted("View saved match results and detailed statistics");
+            ImGui.EndTooltip();
+        }
+    }
+    
+    private void DrawManualPlayerSetup()
+    {
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Manual Player Setup");
+        ImGui.Separator();
+        
+        // Add new player input
+        ImGui.SetNextItemWidth(200);
+        if (ImGui.InputText("Player Name", ref newPlayerName, 100, ImGuiInputTextFlags.EnterReturnsTrue))
+        {
+            if (!string.IsNullOrWhiteSpace(newPlayerName))
+            {
+                plugin.AddPlayerToSetup(newPlayerName.Trim());
+                newPlayerName = "";
+            }
+        }
+        
+        ImGui.SameLine();
+        if (ImGui.Button("Add Player"))
+        {
+            if (!string.IsNullOrWhiteSpace(newPlayerName))
+            {
+                plugin.AddPlayerToSetup(newPlayerName.Trim());
+                newPlayerName = "";
+            }
+        }
+        
+        // Add targeted player button
+        ImGui.SameLine();
+        var targetedPlayerName = plugin.GetTargetedPlayerName();
+        var canAddTargeted = plugin.CanAddTargetedPlayer();
+        
+        if (!canAddTargeted)
+        {
+            ImGui.BeginDisabled();
+        }
+        
+        var buttonText = string.IsNullOrEmpty(targetedPlayerName) 
+            ? "Add Target (No Target)" 
+            : $"Add Target ({targetedPlayerName})";
+            
+        if (ImGui.Button(buttonText))
+        {
+            plugin.AddTargetedPlayerToSetup();
+        }
+        
+        if (!canAddTargeted)
+        {
+            ImGui.EndDisabled();
+            
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.BeginTooltip();
+                if (string.IsNullOrEmpty(targetedPlayerName))
+                {
+                    ImGui.TextUnformatted("No player character targeted");
+                }
+                else
+                {
+                    ImGui.TextUnformatted($"{targetedPlayerName} is already in the player list");
+                }
+                ImGui.EndTooltip();
+            }
+        }
+        
+        // Add party members button (new line)
+        var hasPartyMembers = plugin.HasPartyMembers();
+        
+        if (!hasPartyMembers)
+        {
+            ImGui.BeginDisabled();
+        }
+        
+        var partyButtonText = hasPartyMembers 
+            ? "Add Party Members" 
+            : "Add Party Members (No Party)";
+            
+        if (ImGui.Button(partyButtonText))
+        {
+            var added = plugin.AddAllPartyMembersToSetup();
+            // Could add a notification here if desired
+        }
+        
+        if (!hasPartyMembers)
+        {
+            ImGui.EndDisabled();
+            
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            {
+                ImGui.BeginTooltip();
+                ImGui.TextUnformatted("Not in a party or no party members found");
+                ImGui.EndTooltip();
+            }
+        }
+        else if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted("Add all party members to the player list");
+            ImGui.TextUnformatted("Duplicates will be automatically skipped");
+            ImGui.EndTooltip();
+        }
+        
+        // Display current players with ordering controls
+        var setupPlayers = plugin.GetSetupPlayers();
+        if (setupPlayers.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextUnformatted("Players:");
+            
+            for (int i = 0; i < setupPlayers.Count; i++)
+            {
+                var playerName = setupPlayers[i];
+                ImGui.TextUnformatted($"{i + 1}. {playerName}");
+                
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"↑##{playerName}") && i > 0)
+                {
+                    plugin.MovePlayerUpInSetup(playerName);
+                }
+                
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"↓##{playerName}") && i < setupPlayers.Count - 1)
+                {
+                    plugin.MovePlayerDownInSetup(playerName);
+                }
+                
+                ImGui.SameLine();
+                if (ImGui.SmallButton($"Remove##{playerName}"))
+                {
+                    plugin.RemovePlayerFromSetup(playerName);
+                }
+            }
+            
+            ImGui.Spacing();
+            if (ImGui.Button("Start Game with These Players"))
+            {
+                plugin.StartNewGameWithPlayers();
+            }
+        }
     }
     
     private void DrawGameTable()
     {
         var game = plugin.CurrentGame!;
-        var players = game.Players.Values.OrderByDescending(p => p.TotalScore).ToList();
+        var players = game.GetOrderedPlayers();
         
         if (players.Count == 0)
         {
-            ImGui.TextUnformatted("Waiting for players to throw darts...");
-            ImGui.TextUnformatted("Players type 'tosses a dart at the board' in party chat to join");
+            ImGui.TextUnformatted("No players added to the game yet.");
+            ImGui.TextUnformatted("Add players in the setup section before starting.");
             return;
         }
         
@@ -115,10 +425,21 @@ public class MainWindow : Window, IDisposable
             {
                 // Player header row
                 ImGui.TableNextRow();
-                ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(ImGuiCol.TableHeaderBg));
+                
+                // Highlight current turn player
+                var isCurrentTurn = game.IsPlayerTurn(player.Name);
+                if (isCurrentTurn)
+                {
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(new Vector4(0.3f, 0.7f, 0.3f, 0.3f))); // Light green
+                }
+                else
+                {
+                    ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(ImGuiCol.TableHeaderBg));
+                }
                 
                 ImGui.TableSetColumnIndex(0);
-                ImGui.TextUnformatted($"🎯 {player.Name}");
+                var playerPrefix = isCurrentTurn ? "▶️ " : "🎯 ";
+                ImGui.TextUnformatted($"{playerPrefix}{player.Name}");
                 
                 ImGui.TableSetColumnIndex(1);
                 ImGui.TextUnformatted("");
@@ -225,13 +546,20 @@ public class MainWindow : Window, IDisposable
     
     private void DrawWaitingState()
     {
-        ImGui.TextUnformatted("Start a new game to begin tracking league play.");
+        ImGui.TextUnformatted("Add players manually to begin tracking league play.");
+        
         ImGui.Spacing();
         ImGui.TextUnformatted("How it works:");
         ImGui.TextUnformatted("• Configure rounds per game in Settings (default: 5)");
         ImGui.TextUnformatted("• Each round = 3 dart throws per player");
         ImGui.TextUnformatted("• Each throw = 3 dice rolls (/random)");
-        ImGui.TextUnformatted("• Players type 'tosses a dart at the board' to throw");
+        ImGui.TextUnformatted("• Add players manually, then start the game");
+        ImGui.TextUnformatted("• Use 'Add Party Members' to quickly add everyone");
+        ImGui.TextUnformatted("• Players take turns in the order they were added");
+        ImGui.TextUnformatted("• A player's turn ends after completing 3 throws");
+        ImGui.TextUnformatted("• Only the current turn player can throw darts");
+        ImGui.TextUnformatted("• Use announcement buttons to share progress with party");
+        
         ImGui.Spacing();
         ImGui.TextUnformatted("Scoring:");
         ImGui.TextUnformatted("• Roll 1: Bullseye check (1-5=Double Bull 50pts, 6-15=Single Bull 25pts)");
@@ -247,7 +575,11 @@ public class MainWindow : Window, IDisposable
             // Make the score clickable to show detailed rolls
             if (ImGui.Selectable($"{dartThrow.Score} ({dartThrow.Description})##{playerName}R{roundNumber}T{throwNumber}", false, ImGuiSelectableFlags.None))
             {
-                // Click handled by selectable
+                // Check for double-click to edit
+                if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+                {
+                    OpenThrowEditWindow(playerName, roundNumber, throwNumber, dartThrow);
+                }
             }
             
             // Show tooltip with individual rolls on hover
@@ -262,6 +594,7 @@ public class MainWindow : Window, IDisposable
                 ImGui.Separator();
                 ImGui.TextUnformatted($"Final Score: {dartThrow.Score}");
                 ImGui.TextUnformatted($"Description: {dartThrow.Description}");
+                ImGui.TextUnformatted("Double-click to edit");
                 ImGui.EndTooltip();
             }
         }
@@ -273,5 +606,85 @@ public class MainWindow : Window, IDisposable
         {
             ImGui.TextUnformatted("-");
         }
+    }
+    
+    private void DrawThrowEditWindow()
+    {
+        if (ImGui.BeginPopupModal($"Edit Throw##EditThrow", ref showThrowEditWindow, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.TextUnformatted($"Editing {editingPlayerName} - Round {editingRoundNumber}, Throw {editingThrowNumber}");
+            ImGui.Separator();
+            
+            ImGui.TextUnformatted("Dice Rolls:");
+            
+            // Roll 1 input
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.SliderInt("Roll 1", ref editRoll1, 1, 100))
+            {
+                // Ensure valid range
+                editRoll1 = Math.Max(1, Math.Min(100, editRoll1));
+            }
+            
+            // Roll 2 input
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.SliderInt("Roll 2", ref editRoll2, 1, 100))
+            {
+                editRoll2 = Math.Max(1, Math.Min(100, editRoll2));
+            }
+            
+            // Roll 3 input
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.SliderInt("Roll 3", ref editRoll3, 1, 20))
+            {
+                editRoll3 = Math.Max(1, Math.Min(20, editRoll3));
+            }
+            
+            // Preview the calculated score
+            ImGui.Spacing();
+            var previewResult = DartsScoring.CalculateThrow(editRoll1, editRoll2, editRoll3);
+            ImGui.TextUnformatted($"Preview: {previewResult.Score} points ({previewResult.Description})");
+            
+            ImGui.Spacing();
+            ImGui.Separator();
+            
+            // Buttons
+            if (ImGui.Button("Save Changes"))
+            {
+                plugin.EditThrow(editingPlayerName, editingRoundNumber, editingThrowNumber, editRoll1, editRoll2, editRoll3);
+                showThrowEditWindow = false;
+            }
+            
+            ImGui.SameLine();
+            if (ImGui.Button("Delete Throw"))
+            {
+                plugin.DeleteThrow(editingPlayerName, editingRoundNumber, editingThrowNumber);
+                showThrowEditWindow = false;
+            }
+            
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+            {
+                showThrowEditWindow = false;
+            }
+            
+            ImGui.EndPopup();
+        }
+        
+        // Open popup if flag is set but popup isn't open yet
+        if (showThrowEditWindow && !ImGui.IsPopupOpen($"Edit Throw##EditThrow"))
+        {
+            ImGui.OpenPopup($"Edit Throw##EditThrow");
+        }
+    }
+    
+    private void OpenThrowEditWindow(string playerName, int roundNumber, int throwNumber, DartsThrow dartThrow)
+    {
+        editingPlayerName = playerName;
+        editingRoundNumber = roundNumber;
+        editingThrowNumber = throwNumber;
+        editRoll1 = dartThrow.Roll1 ?? 1;
+        editRoll2 = dartThrow.Roll2 ?? 1;
+        editRoll3 = dartThrow.Roll3 ?? 1;
+        showThrowEditWindow = true;
     }
 }

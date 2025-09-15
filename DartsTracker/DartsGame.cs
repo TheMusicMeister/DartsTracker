@@ -100,16 +100,24 @@ public class DartsPlayer
 public class DartsGame
 {
     public Dictionary<string, DartsPlayer> Players { get; set; }
+    public List<string> PlayerOrder { get; set; }
     public int TotalRounds { get; set; }
     public DateTime StartTime { get; set; }
     public bool IsActive { get; set; }
+    public int CurrentPlayerIndex { get; set; }
+    public int CurrentThrowInTurn { get; set; }
+    public bool IsDetectionPaused { get; set; }
     
     public DartsGame(int totalRounds = 5)
     {
         Players = new Dictionary<string, DartsPlayer>();
+        PlayerOrder = new List<string>();
         TotalRounds = totalRounds;
         StartTime = DateTime.Now;
         IsActive = false;
+        CurrentPlayerIndex = 0;
+        CurrentThrowInTurn = 0;
+        IsDetectionPaused = false;
     }
     
     public void AddPlayer(string playerName)
@@ -117,7 +125,45 @@ public class DartsGame
         if (!Players.ContainsKey(playerName))
         {
             Players[playerName] = new DartsPlayer(playerName, TotalRounds);
+            if (!PlayerOrder.Contains(playerName))
+            {
+                PlayerOrder.Add(playerName);
+            }
         }
+    }
+    
+    public void RemovePlayer(string playerName)
+    {
+        if (Players.ContainsKey(playerName))
+        {
+            Players.Remove(playerName);
+            PlayerOrder.Remove(playerName);
+        }
+    }
+    
+    public void MovePlayerUp(string playerName)
+    {
+        var index = PlayerOrder.IndexOf(playerName);
+        if (index > 0)
+        {
+            PlayerOrder.RemoveAt(index);
+            PlayerOrder.Insert(index - 1, playerName);
+        }
+    }
+    
+    public void MovePlayerDown(string playerName)
+    {
+        var index = PlayerOrder.IndexOf(playerName);
+        if (index >= 0 && index < PlayerOrder.Count - 1)
+        {
+            PlayerOrder.RemoveAt(index);
+            PlayerOrder.Insert(index + 1, playerName);
+        }
+    }
+    
+    public List<DartsPlayer> GetOrderedPlayers()
+    {
+        return PlayerOrder.Select(name => Players[name]).ToList();
     }
     
     public DartsPlayer? GetPlayer(string playerName)
@@ -131,6 +177,41 @@ public class DartsGame
     public List<DartsPlayer> GetLeaderboard()
     {
         return Players.Values.OrderByDescending(p => p.TotalScore).ToList();
+    }
+    
+    public string? GetCurrentTurnPlayer()
+    {
+        if (PlayerOrder.Count == 0 || CurrentPlayerIndex >= PlayerOrder.Count)
+            return null;
+        return PlayerOrder[CurrentPlayerIndex];
+    }
+    
+    public bool IsPlayerTurn(string playerName)
+    {
+        return GetCurrentTurnPlayer() == playerName;
+    }
+    
+    public void AdvanceTurn()
+    {
+        CurrentThrowInTurn++;
+        
+        if (CurrentThrowInTurn >= 3)
+        {
+            CurrentThrowInTurn = 0;
+            CurrentPlayerIndex = (CurrentPlayerIndex + 1) % PlayerOrder.Count;
+            IsDetectionPaused = true; // Pause detection until next turn is announced
+        }
+    }
+    
+    public void ResumeDetection()
+    {
+        IsDetectionPaused = false;
+    }
+    
+    public void ResetTurn()
+    {
+        CurrentPlayerIndex = 0;
+        CurrentThrowInTurn = 0;
     }
     
 }
