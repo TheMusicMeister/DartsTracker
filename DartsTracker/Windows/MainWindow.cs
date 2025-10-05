@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using System.Linq;
+using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
@@ -12,7 +13,7 @@ public class MainWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
     private string newPlayerName = "";
-    
+
     // Throw editing state
     private bool showThrowEditWindow = false;
     private string editingPlayerName = "";
@@ -21,6 +22,15 @@ public class MainWindow : Window, IDisposable
     private int editRoll1 = 1;
     private int editRoll2 = 1;
     private int editRoll3 = 1;
+
+    // League series state
+    private bool showNewSeriesPopup = false;
+    private string newSeriesName = "";
+    private string newSeriesDescription = "";
+
+    // Bracket match state
+    private bool showPlayerSelectionPopup = false;
+    private readonly Dictionary<string, bool> playerSelectionState = new();
 
     public MainWindow(Plugin plugin, string goatImagePath)
         : base("Darts League Tracker##DartsTrackerMain", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -38,7 +48,34 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        // Title bar with buttons on the right
         ImGui.TextUnformatted("Darts League Tracker");
+
+        // Calculate button positions for right alignment
+        var windowWidth = ImGui.GetWindowWidth();
+        var buttonWidth = 80f;
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var rightOffset = buttonWidth * 2 + spacing + 20; // 2 buttons + spacing + padding
+
+        ImGui.SameLine(windowWidth - rightOffset);
+        if (ImGui.Button("Settings", new Vector2(buttonWidth, 0)))
+        {
+            plugin.ToggleConfigUi();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("History", new Vector2(buttonWidth, 0)))
+        {
+            plugin.ToggleHistoryUi();
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted("View saved match results and detailed statistics");
+            ImGui.EndTooltip();
+        }
+
         ImGui.Separator();
         
         // Game status and controls
@@ -61,6 +98,18 @@ public class MainWindow : Window, IDisposable
         {
             DrawThrowEditWindow();
         }
+
+        // Draw new series popup
+        if (showNewSeriesPopup)
+        {
+            DrawNewSeriesPopup();
+        }
+
+        // Draw player selection popup
+        if (showPlayerSelectionPopup)
+        {
+            DrawPlayerSelectionPopup();
+        }
     }
     
     private void DrawGameControls()
@@ -68,8 +117,20 @@ public class MainWindow : Window, IDisposable
         if (plugin.CurrentGame?.IsActive == true)
         {
             var game = plugin.CurrentGame;
+
+            // Show game mode and matchup info
+            var modeText = game.Mode == GameMode.Bracket ? "Bracket Match" : "Free-For-All";
+            ImGui.TextUnformatted($"Mode: {modeText}");
+
+            if (game.Mode == GameMode.Bracket && game.Players.Count == 2)
+            {
+                var players = game.GetOrderedPlayers();
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(0.3f, 0.8f, 1.0f, 1.0f), $"| {players[0].Name} vs {players[1].Name}");
+            }
+
             ImGui.TextUnformatted($"Game Active - {game.TotalRounds} rounds");
-            
+
             // Show turn information
             var currentTurnPlayer = game.GetCurrentTurnPlayer();
             if (currentTurnPlayer != null)
@@ -77,7 +138,7 @@ public class MainWindow : Window, IDisposable
                 ImGui.SameLine();
                 ImGui.TextUnformatted($"| Turn: {currentTurnPlayer} (Throw {game.CurrentThrowInTurn + 1}/3)");
             }
-            
+
             if (plugin.CurrentTrackedPlayer != null)
             {
                 ImGui.SameLine();
@@ -97,12 +158,62 @@ public class MainWindow : Window, IDisposable
             // Show archive button if game is completed
             if (game.IsGameComplete)
             {
+                ImGui.Spacing();
+                ImGui.TextUnformatted("League Series:");
+
+                // League series selection combo
+                var allSeries = plugin.Configuration.MatchHistory.LeagueSeries;
+                var selectedSeriesName = "None (Unassigned)";
+
+                if (plugin.SelectedLeagueSeriesId.HasValue)
+                {
+                    var selectedSeries = allSeries.FirstOrDefault(s => s.Id == plugin.SelectedLeagueSeriesId.Value);
+                    if (selectedSeries != null)
+                    {
+                        selectedSeriesName = selectedSeries.Name;
+                    }
+                }
+
+                ImGui.SetNextItemWidth(200);
+                if (ImGui.BeginCombo("##LeagueSeriesCombo", selectedSeriesName))
+                {
+                    // None option
+                    if (ImGui.Selectable("None (Unassigned)", !plugin.SelectedLeagueSeriesId.HasValue))
+                    {
+                        plugin.SelectedLeagueSeriesId = null;
+                    }
+
+                    ImGui.Separator();
+
+                    // Existing series
+                    foreach (var series in allSeries)
+                    {
+                        var isSelected = plugin.SelectedLeagueSeriesId.HasValue && plugin.SelectedLeagueSeriesId.Value == series.Id;
+                        if (ImGui.Selectable(series.Name, isSelected))
+                        {
+                            plugin.SelectedLeagueSeriesId = series.Id;
+                        }
+                    }
+
+                    ImGui.Separator();
+
+                    // Create new series option
+                    if (ImGui.Selectable("+ Create New Series"))
+                    {
+                        showNewSeriesPopup = true;
+                        newSeriesName = "";
+                        newSeriesDescription = "";
+                    }
+
+                    ImGui.EndCombo();
+                }
+
                 ImGui.SameLine();
                 if (ImGui.Button("Archive Game"))
                 {
                     plugin.ArchiveGame();
                 }
-                
+
                 if (ImGui.IsItemHovered())
                 {
                     ImGui.BeginTooltip();
@@ -232,25 +343,6 @@ public class MainWindow : Window, IDisposable
             // Player setup section
             DrawManualPlayerSetup();
         }
-        
-        ImGui.SameLine();
-        if (ImGui.Button("Settings"))
-        {
-            plugin.ToggleConfigUi();
-        }
-        
-        ImGui.SameLine();
-        if (ImGui.Button("History"))
-        {
-            plugin.ToggleHistoryUi();
-        }
-        
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.BeginTooltip();
-            ImGui.TextUnformatted("View saved match results and detailed statistics");
-            ImGui.EndTooltip();
-        }
     }
     
     private void DrawManualPlayerSetup()
@@ -258,7 +350,24 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
         ImGui.TextUnformatted("Manual Player Setup");
         ImGui.Separator();
-        
+
+        // Game mode selection
+        ImGui.TextUnformatted("Game Mode:");
+        var isFreeForAll = plugin.SelectedGameMode == GameMode.FreeForAll;
+        if (ImGui.RadioButton("Free-For-All (All players compete together)", isFreeForAll))
+        {
+            plugin.SelectedGameMode = GameMode.FreeForAll;
+        }
+
+        var isBracket = plugin.SelectedGameMode == GameMode.Bracket;
+        if (ImGui.RadioButton("Bracket Tournament (Select 2 players per match)", isBracket))
+        {
+            plugin.SelectedGameMode = GameMode.Bracket;
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+
         // Add new player input
         ImGui.SetNextItemWidth(200);
         if (ImGui.InputText("Player Name", ref newPlayerName, 100, ImGuiInputTextFlags.EnterReturnsTrue))
@@ -387,9 +496,46 @@ public class MainWindow : Window, IDisposable
             }
             
             ImGui.Spacing();
-            if (ImGui.Button("Start Game with These Players"))
+
+            // Different button based on game mode
+            if (plugin.SelectedGameMode == GameMode.FreeForAll)
             {
-                plugin.StartNewGameWithPlayers();
+                if (ImGui.Button("Start Game with These Players"))
+                {
+                    plugin.StartNewGameWithPlayers();
+                }
+            }
+            else // Bracket mode
+            {
+                var canStartBracket = setupPlayers.Count >= 2;
+                if (!canStartBracket) ImGui.BeginDisabled();
+
+                if (ImGui.Button("Start Bracket Match"))
+                {
+                    // Open player selection dialog
+                    showPlayerSelectionPopup = true;
+                    playerSelectionState.Clear();
+                    foreach (var player in setupPlayers)
+                    {
+                        playerSelectionState[player] = false;
+                    }
+                }
+
+                if (!canStartBracket) ImGui.EndDisabled();
+
+                if (ImGui.IsItemHovered(canStartBracket ? ImGuiHoveredFlags.None : ImGuiHoveredFlags.AllowWhenDisabled))
+                {
+                    ImGui.BeginTooltip();
+                    if (canStartBracket)
+                    {
+                        ImGui.TextUnformatted("Select 2 players from the pool for this match");
+                    }
+                    else
+                    {
+                        ImGui.TextUnformatted("Add at least 2 players to start a bracket match");
+                    }
+                    ImGui.EndTooltip();
+                }
             }
         }
     }
@@ -686,5 +832,116 @@ public class MainWindow : Window, IDisposable
         editRoll2 = dartThrow.Roll2 ?? 1;
         editRoll3 = dartThrow.Roll3 ?? 1;
         showThrowEditWindow = true;
+    }
+
+    private void DrawNewSeriesPopup()
+    {
+        if (ImGui.BeginPopupModal("Create New League Series##NewSeries", ref showNewSeriesPopup, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.TextUnformatted("Create a new league series to group related matches.");
+            ImGui.Spacing();
+
+            ImGui.TextUnformatted("Series Name:");
+            ImGui.SetNextItemWidth(300);
+            ImGui.InputText("##SeriesName", ref newSeriesName, 100);
+
+            ImGui.Spacing();
+            ImGui.TextUnformatted("Description (optional):");
+            ImGui.SetNextItemWidth(300);
+            ImGui.InputTextMultiline("##SeriesDescription", ref newSeriesDescription, 500, new Vector2(300, 60));
+
+            ImGui.Spacing();
+            ImGui.Separator();
+
+            var canCreate = !string.IsNullOrWhiteSpace(newSeriesName);
+            if (!canCreate) ImGui.BeginDisabled();
+
+            if (ImGui.Button("Create"))
+            {
+                var newSeries = plugin.CreateLeagueSeries(newSeriesName.Trim(), newSeriesDescription.Trim());
+                plugin.SelectedLeagueSeriesId = newSeries.Id;
+                showNewSeriesPopup = false;
+            }
+
+            if (!canCreate) ImGui.EndDisabled();
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+            {
+                showNewSeriesPopup = false;
+            }
+
+            ImGui.EndPopup();
+        }
+
+        // Open popup if flag is set but popup isn't open yet
+        if (showNewSeriesPopup && !ImGui.IsPopupOpen("Create New League Series##NewSeries"))
+        {
+            ImGui.OpenPopup("Create New League Series##NewSeries");
+        }
+    }
+
+    private void DrawPlayerSelectionPopup()
+    {
+        if (ImGui.BeginPopupModal("Select Players for Match##PlayerSelection", ref showPlayerSelectionPopup, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.TextUnformatted("Select 2 players for this bracket match:");
+            ImGui.Spacing();
+
+            var selectedCount = playerSelectionState.Count(kvp => kvp.Value);
+
+            // Display player checkboxes
+            foreach (var player in playerSelectionState.Keys.ToList())
+            {
+                var isSelected = playerSelectionState[player];
+
+                // Disable checkbox if 2 players are already selected and this one isn't selected
+                var shouldDisable = selectedCount >= 2 && !isSelected;
+                if (shouldDisable) ImGui.BeginDisabled();
+
+                if (ImGui.Checkbox(player, ref isSelected))
+                {
+                    playerSelectionState[player] = isSelected;
+                }
+
+                if (shouldDisable) ImGui.EndDisabled();
+            }
+
+            ImGui.Spacing();
+            ImGui.TextUnformatted($"Selected: {selectedCount} / 2 players");
+            ImGui.Spacing();
+            ImGui.Separator();
+
+            // Start button
+            var canStart = selectedCount == 2;
+            if (!canStart) ImGui.BeginDisabled();
+
+            if (ImGui.Button("Start Match"))
+            {
+                var selectedPlayers = playerSelectionState
+                    .Where(kvp => kvp.Value)
+                    .Select(kvp => kvp.Key)
+                    .ToList();
+
+                plugin.StartBracketMatchWithPlayers(selectedPlayers);
+                showPlayerSelectionPopup = false;
+            }
+
+            if (!canStart) ImGui.EndDisabled();
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+            {
+                showPlayerSelectionPopup = false;
+            }
+
+            ImGui.EndPopup();
+        }
+
+        // Open popup if flag is set but popup isn't open yet
+        if (showPlayerSelectionPopup && !ImGui.IsPopupOpen("Select Players for Match##PlayerSelection"))
+        {
+            ImGui.OpenPopup("Select Players for Match##PlayerSelection");
+        }
     }
 }

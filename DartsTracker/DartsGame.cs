@@ -4,6 +4,12 @@ using System.Linq;
 
 namespace DartsTracker;
 
+public enum GameMode
+{
+    FreeForAll,
+    Bracket
+}
+
 public class DartsThrow
 {
     public int? Roll1 { get; set; }
@@ -107,8 +113,9 @@ public class DartsGame
     public int CurrentPlayerIndex { get; set; }
     public int CurrentThrowInTurn { get; set; }
     public bool IsDetectionPaused { get; set; }
-    
-    public DartsGame(int totalRounds = 5)
+    public GameMode Mode { get; set; }
+
+    public DartsGame(int totalRounds = 5, GameMode mode = GameMode.FreeForAll)
     {
         Players = new Dictionary<string, DartsPlayer>();
         PlayerOrder = new List<string>();
@@ -118,6 +125,7 @@ public class DartsGame
         CurrentPlayerIndex = 0;
         CurrentThrowInTurn = 0;
         IsDetectionPaused = false;
+        Mode = mode;
     }
     
     public void AddPlayer(string playerName)

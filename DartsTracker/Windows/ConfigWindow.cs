@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -30,14 +30,6 @@ public class ConfigWindow : Window, IDisposable
     public override void PreDraw()
     {
         // Flags must be added or removed before Draw() is being called, or they won't apply
-        if (configuration.IsConfigWindowMovable)
-        {
-            Flags &= ~ImGuiWindowFlags.NoMove;
-        }
-        else
-        {
-            Flags |= ImGuiWindowFlags.NoMove;
-        }
     }
 
     public override void Draw()
@@ -67,26 +59,13 @@ public class ConfigWindow : Window, IDisposable
             ImGui.EndTooltip();
         }
         
-        
-        
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Window Settings:");
-        ImGui.Separator();
-        
-        var movable = configuration.IsConfigWindowMovable;
-        if (ImGui.Checkbox("Movable Config Window", ref movable))
-        {
-            configuration.IsConfigWindowMovable = movable;
-            configuration.Save();
-        }
-        
         ImGui.Spacing();
         ImGui.TextUnformatted("Development Settings:");
         ImGui.Separator();
         
         // DEV Mode toggle
         var devMode = configuration.DevMode;
-        if (ImGui.Checkbox("DEV Mode", ref devMode))
+        if (ImGui.Checkbox("DEV Mode (use at your own risk)", ref devMode))
         {
             configuration.DevMode = devMode;
             // Note: DevMode is not saved (marked with [NonSerialized])

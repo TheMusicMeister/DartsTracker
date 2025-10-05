@@ -52,6 +52,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly List<int> DiceRolls = new();
     private readonly List<string> SetupPlayers = new();
     private const string TriggerPhrase = "tosses a dart at the board";
+
+    // Game mode state
+    public GameMode SelectedGameMode { get; set; } = GameMode.FreeForAll;
     
     
     // Development settings (non-persistent)
@@ -69,7 +72,7 @@ public sealed class Plugin : IDalamudPlugin
     public ChatChannel SelectedChatChannel { get; set; } = ChatChannel.Party;
     
     // TaskManager for chat message handling
-    private TaskManager ChatTaskManager = new();
+    private TaskManager ChatTaskManager { get; init; }
 
     public Plugin()
     {
@@ -355,17 +358,17 @@ public sealed class Plugin : IDalamudPlugin
     // Public methods
     public void StartNewGame()
     {
-        ActiveGame = new DartsGame(Configuration.RoundsPerGame);
+        ActiveGame = new DartsGame(Configuration.RoundsPerGame, SelectedGameMode);
         ActiveGame.IsActive = true;
         TrackedPlayerName = null;
         DiceRolls.Clear();
     }
-    
+
     public void StartNewGameWithPlayers()
     {
         if (SetupPlayers.Count == 0) return;
-        
-        ActiveGame = new DartsGame(Configuration.RoundsPerGame);
+
+        ActiveGame = new DartsGame(Configuration.RoundsPerGame, SelectedGameMode);
         foreach (var playerName in SetupPlayers)
         {
             ActiveGame.AddPlayer(playerName); // SetupPlayers already contains cleaned names
@@ -375,6 +378,22 @@ public sealed class Plugin : IDalamudPlugin
         TrackedPlayerName = null;
         DiceRolls.Clear();
         SetupPlayers.Clear();
+    }
+
+    public void StartBracketMatchWithPlayers(List<string> selectedPlayers)
+    {
+        if (selectedPlayers.Count != 2) return;
+
+        ActiveGame = new DartsGame(Configuration.RoundsPerGame, GameMode.Bracket);
+        foreach (var playerName in selectedPlayers)
+        {
+            ActiveGame.AddPlayer(playerName);
+        }
+        ActiveGame.IsActive = true;
+        ActiveGame.ResetTurn();
+        TrackedPlayerName = null;
+        DiceRolls.Clear();
+        // Don't clear SetupPlayers - keep the player pool for future matches
     }
     
     // Manual player setup methods
@@ -510,7 +529,7 @@ public sealed class Plugin : IDalamudPlugin
         return game.Players.Values.Any(p => p.Rounds.Any(r => r.IsComplete));
     }
     
-    private void SaveMatchResults(DartsGame game)
+    private void SaveMatchResults(DartsGame game, Guid? leagueSeriesId = null)
     {
         try
         {
@@ -519,23 +538,25 @@ public sealed class Plugin : IDalamudPlugin
                 CompletedAt = DateTime.Now,
                 TotalRounds = game.TotalRounds,
                 WasManualPlayerMode = true,
-                Duration = DateTime.Now - game.StartTime
+                Duration = DateTime.Now - game.StartTime,
+                LeagueSeriesId = leagueSeriesId,
+                Mode = game.Mode
             };
-            
+
             // Convert players to match results and sort by score
             var playerResults = game.Players.Values
                 .Select(player => ConvertToMatchPlayerResult(player))
                 .OrderByDescending(p => p.TotalScore)
                 .ToList();
-            
+
             // Assign positions
             for (int i = 0; i < playerResults.Count; i++)
             {
                 playerResults[i].Position = i + 1;
             }
-            
+
             matchResult.Players = playerResults;
-            
+
             Configuration.MatchHistory.AddMatch(matchResult);
             Configuration.Save();
         }
@@ -586,6 +607,9 @@ public sealed class Plugin : IDalamudPlugin
         SetupPlayers.Clear();
     }
     
+    // Current league series selection for archiving
+    public Guid? SelectedLeagueSeriesId { get; set; } = null;
+
     public void ArchiveGame()
     {
         if (ActiveGame != null)
@@ -593,13 +617,14 @@ public sealed class Plugin : IDalamudPlugin
             // Save match results if game was completed
             if (ShouldSaveMatch(ActiveGame))
             {
-                SaveMatchResults(ActiveGame);
+                SaveMatchResults(ActiveGame, SelectedLeagueSeriesId);
             }
-            
+
             ActiveGame = null;
             TrackedPlayerName = null;
             DiceRolls.Clear();
             SetupPlayers.Clear();
+            SelectedLeagueSeriesId = null;
         }
     }
 
@@ -852,17 +877,81 @@ public sealed class Plugin : IDalamudPlugin
     public bool CanAdvanceTurn()
     {
         if (ActiveGame == null) return false;
-        
+
         var currentPlayer = ActiveGame.GetCurrentTurnPlayer();
         if (currentPlayer == null) return false;
-        
+
         var player = ActiveGame.GetPlayer(currentPlayer);
         var currentRound = player?.GetCurrentRound();
-        
+
         // Can advance if current player has completed all 3 throws in their current turn
-        return currentRound != null && 
-               currentRound.Throw1.IsComplete && 
-               currentRound.Throw2.IsComplete && 
+        return currentRound != null &&
+               currentRound.Throw1.IsComplete &&
+               currentRound.Throw2.IsComplete &&
                currentRound.Throw3.IsComplete;
+    }
+
+    // League Series Management
+    public LeagueSeries CreateLeagueSeries(string name, string description = "")
+    {
+        var series = Configuration.MatchHistory.CreateLeagueSeries(name, description);
+        Configuration.Save();
+        return series;
+    }
+
+    public bool RenameLeagueSeries(Guid seriesId, string newName)
+    {
+        var result = Configuration.MatchHistory.RenameLeagueSeries(seriesId, newName);
+        if (result)
+        {
+            Configuration.Save();
+        }
+        return result;
+    }
+
+    public bool DeleteLeagueSeries(Guid seriesId)
+    {
+        var result = Configuration.MatchHistory.DeleteLeagueSeries(seriesId);
+        if (result)
+        {
+            Configuration.Save();
+        }
+        return result;
+    }
+
+    public void AssignMatchToSeries(MatchResult match, Guid? seriesId)
+    {
+        Configuration.MatchHistory.AssignMatchToSeries(match, seriesId);
+        Configuration.Save();
+    }
+
+    public void UnassignMatch(MatchResult match)
+    {
+        Configuration.MatchHistory.UnassignMatch(match);
+        Configuration.Save();
+    }
+
+    public void AnnounceLeagueStandings(LeagueSeries series, List<LeagueStanding> standings)
+    {
+        if (standings.Count == 0) return;
+
+        // Send title
+        EnqueueChatMessage($"/p ===== {series.Name} - League Standings =====");
+
+        // Send each player's standing
+        for (int i = 0; i < standings.Count; i++)
+        {
+            var standing = standings[i];
+            var position = i switch
+            {
+                0 => "1st",
+                1 => "2nd",
+                2 => "3rd",
+                _ => $"{i + 1}th"
+            };
+
+            var message = $"{position} {standing.PlayerName}: {standing.LeaguePoints} league points ({standing.MatchesWon} wins / {standing.TotalMatches} matches)";
+            EnqueueChatMessage($"/p {message}");
+        }
     }
 }

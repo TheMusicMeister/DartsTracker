@@ -1,4 +1,4 @@
-﻿using Dalamud.Configuration;
+using Dalamud.Configuration;
 using System;
 
 namespace DartsTracker;
@@ -8,7 +8,6 @@ public class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 0;
 
-    public bool IsConfigWindowMovable { get; set; } = true;
     public int RoundsPerGame { get; set; } = 5;
     public int ChatMessageDelayMs { get; set; } = 1000;
     public MatchHistoryData MatchHistory { get; set; } = new();
