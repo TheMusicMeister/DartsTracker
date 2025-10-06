@@ -55,12 +55,19 @@ public class MainWindow : Window, IDisposable
         var windowWidth = ImGui.GetWindowWidth();
         var buttonWidth = 80f;
         var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var rightOffset = buttonWidth * 2 + spacing + 20; // 2 buttons + spacing + padding
+        var rightOffset = buttonWidth * 3 + spacing * 2 + 20; // 3 buttons + spacing + padding
 
         ImGui.SameLine(windowWidth - rightOffset);
-        if (ImGui.Button("Settings", new Vector2(buttonWidth, 0)))
+        if (ImGui.Button("Brackets", new Vector2(buttonWidth, 0)))
         {
-            plugin.ToggleConfigUi();
+            plugin.ToggleBracketUi();
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.TextUnformatted("Manage tournament brackets");
+            ImGui.EndTooltip();
         }
 
         ImGui.SameLine();
@@ -74,6 +81,12 @@ public class MainWindow : Window, IDisposable
             ImGui.BeginTooltip();
             ImGui.TextUnformatted("View saved match results and detailed statistics");
             ImGui.EndTooltip();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Settings", new Vector2(buttonWidth, 0)))
+        {
+            plugin.ToggleConfigUi();
         }
 
         ImGui.Separator();
@@ -334,6 +347,30 @@ public class MainWindow : Window, IDisposable
                     ImGui.TextUnformatted("Current player must complete all 3 throws before advancing");
                 }
                 ImGui.EndTooltip();
+            }
+
+            // Force next turn (DEV mode only)
+            if (plugin.Configuration.DevMode)
+            {
+                ImGui.SameLine();
+                ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.6f, 0.2f, 1.0f));
+                ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(1.0f, 0.7f, 0.3f, 1.0f));
+                ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.6f, 0.5f, 0.1f, 1.0f));
+
+                if (ImGui.Button("Force Next Turn"))
+                {
+                    plugin.AdvanceToNextPlayer();
+                }
+
+                ImGui.PopStyleColor(3);
+
+                if (ImGui.IsItemHovered())
+                {
+                    ImGui.BeginTooltip();
+                    ImGui.TextUnformatted("Manually advance to next turn (ignores completion checks)");
+                    ImGui.TextColored(new Vector4(1.0f, 0.7f, 0.3f, 1.0f), "DEV mode only - use if automatic detection fails");
+                    ImGui.EndTooltip();
+                }
             }
         }
         else
@@ -719,13 +756,12 @@ public class MainWindow : Window, IDisposable
         if (dartThrow.IsComplete)
         {
             // Make the score clickable to show detailed rolls
-            if (ImGui.Selectable($"{dartThrow.Score} ({dartThrow.Description})##{playerName}R{roundNumber}T{throwNumber}", false, ImGuiSelectableFlags.None))
+            ImGui.Selectable($"{dartThrow.Score} ({dartThrow.Description})##{playerName}R{roundNumber}T{throwNumber}", false, ImGuiSelectableFlags.None);
+
+            // Check for double-click to edit
+            if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
             {
-                // Check for double-click to edit
-                if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-                {
-                    OpenThrowEditWindow(playerName, roundNumber, throwNumber, dartThrow);
-                }
+                OpenThrowEditWindow(playerName, roundNumber, throwNumber, dartThrow);
             }
             
             // Show tooltip with individual rolls on hover

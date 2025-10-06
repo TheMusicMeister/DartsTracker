@@ -43,6 +43,7 @@ public class MatchThrowResult
 [Serializable]
 public class MatchResult
 {
+    public Guid Id { get; set; } = Guid.NewGuid();
     public DateTime CompletedAt { get; set; }
     public int TotalRounds { get; set; }
     public bool WasManualPlayerMode { get; set; }
@@ -52,6 +53,8 @@ public class MatchResult
     public int PlayerCount => Players.Count;
     public Guid? LeagueSeriesId { get; set; } = null;
     public GameMode Mode { get; set; } = GameMode.FreeForAll;
+    public Guid? TournamentId { get; set; } = null; // Links bracket matches to their tournament
+    public bool IsTournamentChampionship { get; set; } = false; // True only for the final championship result
 
     public string GetMatchupDisplay()
     {
@@ -143,6 +146,7 @@ public class MatchHistoryData
 
     public List<MatchResult> GetUnassignedMatches()
     {
-        return Matches.Where(m => m.LeagueSeriesId == null).ToList();
+        // A match is unassigned only if it's not in a league series AND not part of a tournament
+        return Matches.Where(m => m.LeagueSeriesId == null && m.TournamentId == null).ToList();
     }
 }

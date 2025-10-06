@@ -1,5 +1,6 @@
 using Dalamud.Configuration;
 using System;
+using System.Collections.Generic;
 
 namespace DartsTracker;
 
@@ -11,7 +12,8 @@ public class Configuration : IPluginConfiguration
     public int RoundsPerGame { get; set; } = 5;
     public int ChatMessageDelayMs { get; set; } = 1000;
     public MatchHistoryData MatchHistory { get; set; } = new();
-    
+    public List<Tournament> Tournaments { get; set; } = new();
+
     // Development settings (not saved/persistent)
     [NonSerialized]
     public bool DevMode = false;

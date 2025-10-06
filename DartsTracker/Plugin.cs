@@ -45,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
     private ConfigWindow ConfigWindow { get; init; }
     private MainWindow MainWindow { get; init; }
     private HistoryWindow HistoryWindow { get; init; }
+    private BracketWindow BracketWindow { get; init; }
 
     // Game state
     private DartsGame? ActiveGame;
@@ -55,6 +56,9 @@ public sealed class Plugin : IDalamudPlugin
 
     // Game mode state
     public GameMode SelectedGameMode { get; set; } = GameMode.FreeForAll;
+
+    // Tournament state
+    public Tournament? ActiveTournament { get; set; }
     
     
     // Development settings (non-persistent)
@@ -85,11 +89,13 @@ public sealed class Plugin : IDalamudPlugin
         ConfigWindow = new ConfigWindow(this);
         MainWindow = new MainWindow(this, goatImagePath);
         HistoryWindow = new HistoryWindow(this);
+        BracketWindow = new BracketWindow(this);
         ChatTaskManager = new TaskManager();
 
         WindowSystem.AddWindow(ConfigWindow);
         WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(HistoryWindow);
+        WindowSystem.AddWindow(BracketWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -127,6 +133,7 @@ public sealed class Plugin : IDalamudPlugin
         ConfigWindow.Dispose();
         MainWindow.Dispose();
         HistoryWindow.Dispose();
+        BracketWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
     }
@@ -140,6 +147,14 @@ public sealed class Plugin : IDalamudPlugin
     public void ToggleConfigUi() => ConfigWindow.Toggle();
     public void ToggleMainUi() => MainWindow.Toggle();
     public void ToggleHistoryUi() => HistoryWindow.Toggle();
+    public void ToggleBracketUi() => BracketWindow.Toggle();
+
+    public void OpenBracketWindowWithTournament(Tournament tournament)
+    {
+        ActiveTournament = tournament;
+        BracketWindow.SelectTournament(tournament);
+        BracketWindow.IsOpen = true;
+    }
     
     private string GetChatCommand(string message)
     {
@@ -395,7 +410,151 @@ public sealed class Plugin : IDalamudPlugin
         DiceRolls.Clear();
         // Don't clear SetupPlayers - keep the player pool for future matches
     }
-    
+
+    // Tournament Management
+    public Tournament CreateTournament(string name, List<string> players, Guid? leagueSeriesId = null)
+    {
+        var tournament = BracketGenerator.GenerateTournament(name, players, leagueSeriesId);
+        Configuration.Tournaments.Add(tournament);
+        Configuration.Save();
+        return tournament;
+    }
+
+    public void SetActiveTournament(Tournament tournament)
+    {
+        ActiveTournament = tournament;
+    }
+
+    public void StartTournamentMatch(BracketMatch match)
+    {
+        if (match.Player1 == null || match.Player2 == null || match.IsComplete)
+            return;
+
+        var players = new List<string> { match.Player1, match.Player2 };
+        StartBracketMatchWithPlayers(players);
+        CurrentTournamentMatch = match;
+
+        // Auto-set league series if tournament is linked
+        if (ActiveTournament?.LeagueSeriesId.HasValue == true)
+        {
+            SelectedLeagueSeriesId = ActiveTournament.LeagueSeriesId;
+        }
+    }
+
+    public void CompleteTournamentMatch(Guid matchId, string winner)
+    {
+        if (ActiveTournament == null) return;
+
+        // Find the match
+        BracketMatch? match = null;
+        foreach (var round in ActiveTournament.Rounds)
+        {
+            match = round.Matches.FirstOrDefault(m => m.Id == matchId);
+            if (match != null) break;
+        }
+
+        // Allow setting winner if at least one player exists
+        if (match == null) return;
+
+        // Set the winner in the bracket
+        BracketGenerator.SetMatchWinner(ActiveTournament, matchId, winner);
+
+        // Check if tournament is now complete
+        if (ActiveTournament.IsComplete && ActiveTournament.LeagueSeriesId.HasValue)
+        {
+            // Tournament just completed - award league point to the champion
+            var tournamentWinner = ActiveTournament.Rounds.Last().Matches.First().Winner;
+            if (tournamentWinner != null)
+            {
+                CreateTournamentWinResult(tournamentWinner, ActiveTournament.LeagueSeriesId.Value);
+            }
+        }
+
+        Configuration.Save();
+    }
+
+    private void CreateTournamentWinResult(string winner, Guid leagueSeriesId)
+    {
+        if (ActiveTournament == null) return;
+
+        // Create a tournament championship result
+        var matchResult = new MatchResult
+        {
+            CompletedAt = DateTime.Now,
+            TotalRounds = 0,
+            WasManualPlayerMode = true,
+            Duration = TimeSpan.Zero,
+            LeagueSeriesId = leagueSeriesId,
+            Mode = GameMode.Bracket,
+            TournamentId = ActiveTournament.Id,
+            IsTournamentChampionship = true
+        };
+
+        // Only the winner gets a position (for league point)
+        matchResult.Players.Add(new MatchPlayerResult
+        {
+            PlayerName = winner,
+            Position = 1,
+            TotalScore = 0,
+            Rounds = new List<MatchRoundResult>()
+        });
+
+        Configuration.MatchHistory.AddMatch(matchResult);
+    }
+
+    public void ResetTournamentMatch(Guid matchId)
+    {
+        if (ActiveTournament == null) return;
+
+        BracketGenerator.ResetMatch(ActiveTournament, matchId);
+        Configuration.Save();
+    }
+
+    public void DeleteTournament(Guid tournamentId)
+    {
+        var tournament = Configuration.Tournaments.FirstOrDefault(t => t.Id == tournamentId);
+        if (tournament != null)
+        {
+            // Delete all associated matches (both individual bracket matches and championship)
+            var associatedMatches = Configuration.MatchHistory.Matches
+                .Where(m => m.TournamentId == tournamentId)
+                .ToList();
+
+            foreach (var match in associatedMatches)
+            {
+                Configuration.MatchHistory.Matches.Remove(match);
+            }
+
+            // Delete the tournament itself
+            Configuration.Tournaments.Remove(tournament);
+            if (ActiveTournament?.Id == tournamentId)
+            {
+                ActiveTournament = null;
+            }
+            Configuration.Save();
+        }
+    }
+
+    public void DeleteMatch(Guid matchId)
+    {
+        var match = Configuration.MatchHistory.Matches.FirstOrDefault(m => m.Id == matchId);
+        if (match != null)
+        {
+            Configuration.MatchHistory.Matches.Remove(match);
+            Configuration.Save();
+        }
+    }
+
+    public void DeleteAllUnassignedMatches()
+    {
+        var unassignedMatches = Configuration.MatchHistory.GetUnassignedMatches().ToList();
+        foreach (var match in unassignedMatches)
+        {
+            Configuration.MatchHistory.Matches.Remove(match);
+        }
+        Configuration.Save();
+    }
+
     // Manual player setup methods
     public void AddPlayerToSetup(string playerName)
     {
@@ -529,7 +688,7 @@ public sealed class Plugin : IDalamudPlugin
         return game.Players.Values.Any(p => p.Rounds.Any(r => r.IsComplete));
     }
     
-    private void SaveMatchResults(DartsGame game, Guid? leagueSeriesId = null)
+    private void SaveMatchResults(DartsGame game, Guid? leagueSeriesId = null, Guid? tournamentId = null, Guid? bracketMatchId = null)
     {
         try
         {
@@ -540,7 +699,8 @@ public sealed class Plugin : IDalamudPlugin
                 WasManualPlayerMode = true,
                 Duration = DateTime.Now - game.StartTime,
                 LeagueSeriesId = leagueSeriesId,
-                Mode = game.Mode
+                Mode = game.Mode,
+                TournamentId = tournamentId
             };
 
             // Convert players to match results and sort by score
@@ -558,6 +718,21 @@ public sealed class Plugin : IDalamudPlugin
             matchResult.Players = playerResults;
 
             Configuration.MatchHistory.AddMatch(matchResult);
+
+            // If this is a bracket match, store the match result ID in the bracket
+            if (bracketMatchId.HasValue && ActiveTournament != null)
+            {
+                foreach (var round in ActiveTournament.Rounds)
+                {
+                    var bracketMatch = round.Matches.FirstOrDefault(m => m.Id == bracketMatchId.Value);
+                    if (bracketMatch != null)
+                    {
+                        bracketMatch.MatchResultId = matchResult.Id;
+                        break;
+                    }
+                }
+            }
+
             Configuration.Save();
         }
         catch (Exception ex)
@@ -609,6 +784,7 @@ public sealed class Plugin : IDalamudPlugin
     
     // Current league series selection for archiving
     public Guid? SelectedLeagueSeriesId { get; set; } = null;
+    public BracketMatch? CurrentTournamentMatch { get; set; } = null;
 
     public void ArchiveGame()
     {
@@ -617,7 +793,31 @@ public sealed class Plugin : IDalamudPlugin
             // Save match results if game was completed
             if (ShouldSaveMatch(ActiveGame))
             {
-                SaveMatchResults(ActiveGame, SelectedLeagueSeriesId);
+                // For tournament matches, link to tournament but not to league series
+                // Only the final tournament winner gets a league point
+                Guid? seriesId = SelectedLeagueSeriesId;
+                Guid? tournamentId = null;
+                Guid? bracketMatchId = null;
+
+                if (CurrentTournamentMatch != null && ActiveTournament != null)
+                {
+                    seriesId = null; // Don't link individual bracket matches to series
+                    tournamentId = ActiveTournament.Id;
+                    bracketMatchId = CurrentTournamentMatch.Id;
+                }
+
+                SaveMatchResults(ActiveGame, seriesId, tournamentId, bracketMatchId);
+
+                // If this was a tournament match, mark it as complete
+                if (CurrentTournamentMatch != null && ActiveTournament != null)
+                {
+                    var winner = ActiveGame.GetLeaderboard().FirstOrDefault()?.Name;
+                    if (winner != null)
+                    {
+                        CompleteTournamentMatch(CurrentTournamentMatch.Id, winner);
+                    }
+                    CurrentTournamentMatch = null;
+                }
             }
 
             ActiveGame = null;
@@ -881,14 +1081,8 @@ public sealed class Plugin : IDalamudPlugin
         var currentPlayer = ActiveGame.GetCurrentTurnPlayer();
         if (currentPlayer == null) return false;
 
-        var player = ActiveGame.GetPlayer(currentPlayer);
-        var currentRound = player?.GetCurrentRound();
-
-        // Can advance if current player has completed all 3 throws in their current turn
-        return currentRound != null &&
-               currentRound.Throw1.IsComplete &&
-               currentRound.Throw2.IsComplete &&
-               currentRound.Throw3.IsComplete;
+        // Can advance if current player has completed 3 or more throws in their current turn
+        return ActiveGame.CurrentThrowInTurn >= 3;
     }
 
     // League Series Management
@@ -953,5 +1147,22 @@ public sealed class Plugin : IDalamudPlugin
             var message = $"{position} {standing.PlayerName}: {standing.LeaguePoints} league points ({standing.MatchesWon} wins / {standing.TotalMatches} matches)";
             EnqueueChatMessage($"/p {message}");
         }
+    }
+
+    // Development/Debug methods
+    public void ClearAllMatchHistory()
+    {
+        Configuration.MatchHistory.Matches.Clear();
+        Configuration.Save();
+    }
+
+    public void ClearAllTournamentHistory()
+    {
+        Configuration.Tournaments.Clear();
+        if (ActiveTournament != null)
+        {
+            ActiveTournament = null;
+        }
+        Configuration.Save();
     }
 }

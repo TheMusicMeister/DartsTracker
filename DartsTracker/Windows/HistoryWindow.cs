@@ -22,6 +22,8 @@ public class HistoryWindow : Window, IDisposable
     private readonly Plugin plugin;
     private MatchResult? selectedMatch;
     private LeagueSeries? selectedSeries;
+    private Tournament? selectedTournament;
+    private MatchResult? selectedTournamentMatch; // Drill-down match within tournament
     private bool showNewSeriesPopup = false;
     private bool showRenameSeriesPopup = false;
     private string newSeriesName = "";
@@ -66,11 +68,22 @@ public class HistoryWindow : Window, IDisposable
             ImGui.TableSetColumnIndex(0);
             DrawMatchListGrouped();
 
-            // Right column: Match details or series summary
+            // Right column: Match details, series summary, or tournament details
             ImGui.TableSetColumnIndex(1);
             if (selectedSeries != null)
             {
                 DrawSeriesSummary();
+            }
+            else if (selectedTournament != null)
+            {
+                if (selectedTournamentMatch != null)
+                {
+                    DrawTournamentMatchDetails();
+                }
+                else
+                {
+                    DrawTournamentDetails();
+                }
             }
             else
             {
@@ -103,6 +116,49 @@ public class HistoryWindow : Window, IDisposable
             newSeriesDescription = "";
         }
 
+        // Clear button (only visible in DEV mode)
+        if (plugin.Configuration.DevMode)
+        {
+            ImGui.Spacing();
+
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.8f, 0.2f, 0.2f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(1.0f, 0.3f, 0.3f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.6f, 0.1f, 0.1f, 1.0f));
+
+            if (ImGui.Button("Clear All Match History"))
+            {
+                ImGui.OpenPopup("ConfirmClearMatches");
+            }
+
+            ImGui.PopStyleColor(3);
+
+            // Confirmation popup
+            if (ImGui.BeginPopupModal("ConfirmClearMatches", ImGuiWindowFlags.AlwaysAutoResize))
+            {
+                ImGui.TextUnformatted("Are you sure you want to clear ALL match history?");
+                ImGui.TextColored(new Vector4(1.0f, 0.5f, 0.5f, 1.0f), "This action cannot be undone!");
+                ImGui.Spacing();
+
+                if (ImGui.Button("Yes, Clear All", new Vector2(120, 0)))
+                {
+                    plugin.ClearAllMatchHistory();
+                    selectedMatch = null;
+                    selectedSeries = null;
+                    selectedTournament = null;
+                    selectedTournamentMatch = null;
+                    ImGui.CloseCurrentPopup();
+                }
+
+                ImGui.SameLine();
+                if (ImGui.Button("Cancel", new Vector2(120, 0)))
+                {
+                    ImGui.CloseCurrentPopup();
+                }
+
+                ImGui.EndPopup();
+            }
+        }
+
         ImGui.Separator();
 
         if (ImGui.BeginChild("MatchList", new Vector2(0, 0), true))
@@ -117,32 +173,38 @@ public class HistoryWindow : Window, IDisposable
                 var headerText = $"{series.Name} ({seriesMatches.Count} matches)";
                 if (ImGui.CollapsingHeader(headerText, ImGuiTreeNodeFlags.DefaultOpen))
                 {
+                    // Context menu for series header
+                    if (ImGui.BeginPopupContextItem($"SeriesContext##{series.Id}"))
+                    {
+                        if (ImGui.MenuItem("View Summary"))
+                        {
+                            selectedSeries = series;
+                            selectedMatch = null;
+                        }
+
+                        if (ImGui.MenuItem("Rename"))
+                        {
+                            editingSeriesId = series.Id;
+                            editingSeriesName = series.Name;
+                            showRenameSeriesPopup = true;
+                        }
+
+                        ImGui.Separator();
+
+                        if (ImGui.MenuItem("Delete Series"))
+                        {
+                            plugin.DeleteLeagueSeries(series.Id);
+                        }
+
+                        ImGui.EndPopup();
+                    }
+
                     ImGui.Indent();
-
-                    // Series management buttons
-                    if (ImGui.SmallButton($"View Summary##{series.Id}"))
-                    {
-                        selectedSeries = series;
-                        selectedMatch = null;
-                    }
-
-                    ImGui.SameLine();
-                    if (ImGui.SmallButton($"Rename##{series.Id}"))
-                    {
-                        editingSeriesId = series.Id;
-                        editingSeriesName = series.Name;
-                        showRenameSeriesPopup = true;
-                    }
-
-                    ImGui.SameLine();
-                    if (ImGui.SmallButton($"Delete##{series.Id}"))
-                    {
-                        plugin.DeleteLeagueSeries(series.Id);
-                    }
 
                     if (!string.IsNullOrWhiteSpace(series.Description))
                     {
                         ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1.0f), series.Description);
+                        ImGui.Spacing();
                     }
 
                     ImGui.Spacing();
@@ -165,6 +227,23 @@ public class HistoryWindow : Window, IDisposable
                 var unassignedHeader = $"Unassigned Matches ({unassignedMatches.Count})";
                 if (ImGui.CollapsingHeader(unassignedHeader, ImGuiTreeNodeFlags.DefaultOpen))
                 {
+                    // Context menu for unassigned matches header
+                    if (ImGui.BeginPopupContextItem("UnassignedMatchesContext"))
+                    {
+                        ImGui.TextColored(new Vector4(1.0f, 0.7f, 0.3f, 1.0f), $"Delete all {unassignedMatches.Count} unassigned matches?");
+                        ImGui.Separator();
+
+                        if (ImGui.MenuItem("Delete All Unassigned Matches"))
+                        {
+                            plugin.DeleteAllUnassignedMatches();
+                            selectedMatch = null;
+                            selectedTournament = null;
+                            selectedTournamentMatch = null;
+                        }
+
+                        ImGui.EndPopup();
+                    }
+
                     ImGui.Indent();
 
                     foreach (var match in unassignedMatches)
@@ -182,28 +261,101 @@ public class HistoryWindow : Window, IDisposable
 
     private void DrawMatchItem(MatchResult match, Guid? currentSeriesId)
     {
-        var isSelected = selectedMatch == match;
-
-        if (ImGui.Selectable($"{match.CompletedAt:MM/dd/yyyy HH:mm}##{match.CompletedAt.Ticks}", isSelected))
+        // Skip individual tournament matches - they're shown under tournament entries
+        if (match.TournamentId.HasValue && !match.IsTournamentChampionship)
         {
-            selectedMatch = match;
-            selectedSeries = null; // Deselect series when selecting a match
+            return;
+        }
+
+        var isSelected = selectedMatch == match || selectedTournament != null;
+
+        // Display text
+        var displayText = match.CompletedAt.ToString("MM/dd/yyyy HH:mm");
+        if (match.IsTournamentChampionship)
+        {
+            var tournament = plugin.Configuration.Tournaments.FirstOrDefault(t => t.Id == match.TournamentId);
+            if (tournament != null)
+            {
+                displayText = $"{tournament.Name} Tournament";
+                isSelected = selectedTournament == tournament;
+            }
+        }
+
+        if (ImGui.Selectable($"{displayText}##{match.Id}", isSelected))
+        {
+            if (match.IsTournamentChampionship && match.TournamentId.HasValue)
+            {
+                var tournament = plugin.Configuration.Tournaments.FirstOrDefault(t => t.Id == match.TournamentId);
+                selectedTournament = tournament;
+                selectedMatch = null;
+                selectedSeries = null;
+                selectedTournamentMatch = null;
+            }
+            else
+            {
+                selectedMatch = match;
+                selectedSeries = null;
+                selectedTournament = null;
+                selectedTournamentMatch = null;
+            }
         }
 
         if (ImGui.IsItemHovered())
         {
             ImGui.BeginTooltip();
-            ImGui.TextUnformatted($"Mode: {(match.Mode == GameMode.Bracket ? "Bracket" : "Free-For-All")}");
-            ImGui.TextUnformatted($"Winner: {match.Winner}");
-            ImGui.TextUnformatted($"Players: {match.GetMatchupDisplay()}");
-            ImGui.TextUnformatted($"Duration: {match.Duration:mm\\:ss}");
-            ImGui.TextUnformatted("Right-click to move to different series");
+            if (match.IsTournamentChampionship)
+            {
+                var tournament = match.TournamentId.HasValue
+                    ? plugin.Configuration.Tournaments.FirstOrDefault(t => t.Id == match.TournamentId)
+                    : null;
+
+                if (tournament != null)
+                {
+                    ImGui.TextUnformatted("Tournament Bracket");
+                    ImGui.TextUnformatted($"Champion: {match.Winner}");
+                    ImGui.TextUnformatted("Click to view bracket details");
+                }
+                else
+                {
+                    ImGui.TextUnformatted("Orphaned Tournament Match");
+                    ImGui.TextColored(new Vector4(1.0f, 0.7f, 0.3f, 1.0f), "Tournament was deleted");
+                    ImGui.TextUnformatted($"Champion: {match.Winner}");
+                    ImGui.TextUnformatted("Right-click to delete");
+                }
+            }
+            else
+            {
+                ImGui.TextUnformatted($"Mode: {(match.Mode == GameMode.Bracket ? "Bracket" : "Free-For-All")}");
+                ImGui.TextUnformatted($"Winner: {match.Winner}");
+                ImGui.TextUnformatted($"Players: {match.GetMatchupDisplay()}");
+                ImGui.TextUnformatted($"Duration: {match.Duration:mm\\:ss}");
+                ImGui.TextUnformatted("Right-click for options");
+            }
             ImGui.EndTooltip();
         }
 
-        // Context menu for moving matches
-        if (ImGui.BeginPopupContextItem($"MatchContext##{match.CompletedAt.Ticks}"))
+        // Check if this championship match is orphaned (tournament was deleted)
+        var isOrphanedChampionship = false;
+        Tournament? tournamentForBracket = null;
+        if (match.IsTournamentChampionship && match.TournamentId.HasValue)
         {
+            tournamentForBracket = plugin.Configuration.Tournaments.FirstOrDefault(t => t.Id == match.TournamentId);
+            isOrphanedChampionship = (tournamentForBracket == null);
+        }
+
+        // Allow context menu for all matches (including all tournament championships)
+        if (ImGui.BeginPopupContextItem($"MatchContext##{match.Id}"))
+        {
+            // For valid tournament championships, show option to open in brackets window
+            if (match.IsTournamentChampionship && !isOrphanedChampionship && tournamentForBracket != null)
+            {
+                if (ImGui.MenuItem("Open in Brackets Window"))
+                {
+                    plugin.OpenBracketWindowWithTournament(tournamentForBracket);
+                }
+                ImGui.Separator();
+            }
+
             ImGui.TextUnformatted("Move to Series:");
             ImGui.Separator();
 
@@ -228,21 +380,54 @@ public class HistoryWindow : Window, IDisposable
                 }
             }
 
+            ImGui.Separator();
+
+            // Delete option
+            if (ImGui.MenuItem("Delete Match"))
+            {
+                plugin.DeleteMatch(match.Id);
+                if (selectedMatch == match)
+                {
+                    selectedMatch = null;
+                }
+            }
+
             ImGui.EndPopup();
         }
 
-        ImGui.SameLine();
-        ImGui.TextUnformatted($"- {match.Winner} won");
+        if (!match.IsTournamentChampionship)
+        {
+            ImGui.SameLine();
+            ImGui.TextUnformatted($"- {match.Winner} won");
 
-        // Second line with additional info
-        ImGui.Indent();
+            // Second line with additional info
+            ImGui.Indent();
 
-        var modeIndicator = match.Mode == GameMode.Bracket ? "[1v1]" : "[FFA]";
-        ImGui.TextColored(new Vector4(0.7f, 0.9f, 0.7f, 1.0f), modeIndicator);
-        ImGui.SameLine();
-        ImGui.TextUnformatted($"{match.GetMatchupDisplay()}, {match.TotalRounds} rounds");
+            var modeIndicator = match.Mode == GameMode.Bracket ? "[1v1]" : "[FFA]";
+            ImGui.TextColored(new Vector4(0.7f, 0.9f, 0.7f, 1.0f), modeIndicator);
+            ImGui.SameLine();
+            ImGui.TextUnformatted($"{match.GetMatchupDisplay()}, {match.TotalRounds} rounds");
 
-        ImGui.Unindent();
+            ImGui.Unindent();
+        }
+        else
+        {
+            // Tournament championship entry
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(1.0f, 0.8f, 0.2f, 1.0f), "🏆");
+            ImGui.SameLine();
+            ImGui.TextUnformatted($"Champion: {match.Winner}");
+
+            ImGui.Indent();
+            var tournament = plugin.Configuration.Tournaments.FirstOrDefault(t => t.Id == match.TournamentId);
+            if (tournament != null)
+            {
+                ImGui.TextColored(new Vector4(0.7f, 0.9f, 0.7f, 1.0f), "[Tournament]");
+                ImGui.SameLine();
+                ImGui.TextUnformatted($"{tournament.ParticipantPool.Count} participants");
+            }
+            ImGui.Unindent();
+        }
 
         ImGui.Spacing();
     }
@@ -659,5 +844,263 @@ public class HistoryWindow : Window, IDisposable
             .OrderByDescending(s => s.LeaguePoints)
             .ThenByDescending(s => s.MatchesWon)
             .ToList();
+    }
+
+    private void DrawTournamentDetails()
+    {
+        if (selectedTournament == null)
+        {
+            ImGui.TextUnformatted("No tournament selected.");
+            return;
+        }
+
+        var tournament = selectedTournament;
+
+        ImGui.TextUnformatted($"Tournament: {tournament.Name}");
+        if (ImGui.Button("← Back to List"))
+        {
+            selectedTournament = null;
+            selectedTournamentMatch = null;
+        }
+
+        ImGui.Separator();
+
+        // Tournament info
+        ImGui.TextUnformatted($"Created: {tournament.CreatedAt:yyyy-MM-dd}");
+        ImGui.TextUnformatted($"Participants: {tournament.ParticipantPool.Count}");
+        ImGui.TextUnformatted($"Status: {(tournament.IsComplete ? "Complete" : tournament.GetCurrentRoundName())}");
+
+        if (tournament.IsComplete)
+        {
+            var champion = tournament.Rounds.Last().Matches.First().Winner;
+            ImGui.TextColored(new Vector4(1.0f, 0.8f, 0.2f, 1.0f), $"🏆 Champion: {champion}");
+        }
+
+        if (tournament.LeagueSeriesId.HasValue)
+        {
+            var series = plugin.Configuration.MatchHistory.LeagueSeries.FirstOrDefault(s => s.Id == tournament.LeagueSeriesId);
+            if (series != null)
+            {
+                ImGui.TextUnformatted($"League Series: {series.Name}");
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.TextUnformatted("Bracket Results:");
+        ImGui.Separator();
+
+        // Display bracket rounds
+        if (ImGui.BeginChild("TournamentBracket", new Vector2(0, 0), false))
+        {
+            foreach (var round in tournament.Rounds)
+            {
+                if (ImGui.CollapsingHeader($"{round.RoundName} ({round.Matches.Count} matches)", ImGuiTreeNodeFlags.DefaultOpen))
+                {
+                    ImGui.Indent();
+
+                    if (ImGui.BeginTable($"RoundMatches{round.RoundNumber}", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+                    {
+                        ImGui.TableSetupColumn("Match", ImGuiTableColumnFlags.WidthFixed, 60);
+                        ImGui.TableSetupColumn("Player 1", ImGuiTableColumnFlags.WidthFixed, 150);
+                        ImGui.TableSetupColumn("Player 2", ImGuiTableColumnFlags.WidthFixed, 150);
+                        ImGui.TableSetupColumn("Result", ImGuiTableColumnFlags.WidthStretch);
+
+                        ImGui.TableHeadersRow();
+
+                        foreach (var match in round.Matches)
+                        {
+                            ImGui.TableNextRow();
+
+                            ImGui.TableSetColumnIndex(0);
+                            ImGui.TextUnformatted($"#{match.MatchNumber}");
+
+                            ImGui.TableSetColumnIndex(1);
+                            var p1Color = match.Winner == match.Player1 ? new Vector4(0.3f, 0.9f, 0.3f, 1.0f) : new Vector4(1, 1, 1, 1);
+                            ImGui.TextColored(p1Color, match.Player1 ?? "TBD");
+
+                            ImGui.TableSetColumnIndex(2);
+                            var p2Color = match.Winner == match.Player2 ? new Vector4(0.3f, 0.9f, 0.3f, 1.0f) : new Vector4(1, 1, 1, 1);
+                            ImGui.TextColored(p2Color, match.Player2 ?? "TBD");
+
+                            ImGui.TableSetColumnIndex(3);
+                            if (match.IsBye)
+                            {
+                                ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1.0f), "Bye");
+                            }
+                            else if (match.IsComplete)
+                            {
+                                // Check if there's detailed match data
+                                if (match.MatchResultId.HasValue)
+                                {
+                                    var matchResult = plugin.Configuration.MatchHistory.Matches.FirstOrDefault(m => m.Id == match.MatchResultId.Value);
+                                    if (matchResult != null)
+                                    {
+                                        if (ImGui.SmallButton($"View Details##{match.Id}"))
+                                        {
+                                            selectedTournamentMatch = matchResult;
+                                        }
+                                        ImGui.SameLine();
+                                    }
+                                }
+                                ImGui.TextColored(new Vector4(0.3f, 0.9f, 0.3f, 1.0f), $"Winner: {match.Winner}");
+                            }
+                            else
+                            {
+                                ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1.0f), "Not played");
+                            }
+                        }
+
+                        ImGui.EndTable();
+                    }
+
+                    ImGui.Unindent();
+                    ImGui.Spacing();
+                }
+            }
+
+            ImGui.EndChild();
+        }
+    }
+
+    private void DrawTournamentMatchDetails()
+    {
+        if (selectedTournamentMatch == null || selectedTournament == null)
+        {
+            ImGui.TextUnformatted("No match selected.");
+            return;
+        }
+
+        var match = selectedTournamentMatch;
+
+        ImGui.TextUnformatted($"Tournament: {selectedTournament.Name}");
+        if (ImGui.Button("← Back to Bracket"))
+        {
+            selectedTournamentMatch = null;
+        }
+
+        ImGui.Separator();
+
+        // Find which round this match was in
+        BracketMatch? bracketMatch = null;
+        BracketRound? bracketRound = null;
+        foreach (var round in selectedTournament.Rounds)
+        {
+            bracketMatch = round.Matches.FirstOrDefault(m => m.MatchResultId == match.Id);
+            if (bracketMatch != null)
+            {
+                bracketRound = round;
+                break;
+            }
+        }
+
+        if (bracketRound != null && bracketMatch != null)
+        {
+            ImGui.TextUnformatted($"Round: {bracketRound.RoundName} - Match #{bracketMatch.MatchNumber}");
+        }
+
+        ImGui.TextUnformatted($"Date: {match.CompletedAt:yyyy-MM-dd HH:mm:ss}");
+        ImGui.TextUnformatted($"Duration: {match.Duration:hh\\:mm\\:ss}");
+        ImGui.TextUnformatted($"Winner: {match.Winner}");
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.TextUnformatted("Match Results:");
+        ImGui.Separator();
+
+        // Display player results in a table
+        if (ImGui.BeginTable("TournamentMatchResults", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Position", ImGuiTableColumnFlags.WidthFixed, 80);
+            ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 150);
+            ImGui.TableSetupColumn("Total Score", ImGuiTableColumnFlags.WidthFixed, 100);
+            ImGui.TableSetupColumn("Rounds", ImGuiTableColumnFlags.WidthStretch);
+
+            ImGui.TableHeadersRow();
+
+            foreach (var player in match.Players)
+            {
+                ImGui.TableNextRow();
+
+                ImGui.TableSetColumnIndex(0);
+                var positionText = player.Position switch
+                {
+                    1 => "🥇 1st",
+                    2 => "🥈 2nd",
+                    _ => $"{player.Position}th"
+                };
+                ImGui.TextUnformatted(positionText);
+
+                ImGui.TableSetColumnIndex(1);
+                ImGui.TextUnformatted(player.PlayerName);
+
+                ImGui.TableSetColumnIndex(2);
+                ImGui.TextUnformatted(player.TotalScore.ToString());
+
+                ImGui.TableSetColumnIndex(3);
+                ImGui.TextUnformatted($"{player.Rounds.Count} rounds completed");
+            }
+
+            ImGui.EndTable();
+        }
+
+        // Display round-by-round details
+        if (match.Players.Count > 0 && match.Players[0].Rounds.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextUnformatted("Round-by-Round Scores:");
+            ImGui.Separator();
+
+            if (ImGui.BeginTabBar("RoundTabs"))
+            {
+                foreach (var player in match.Players)
+                {
+                    if (ImGui.BeginTabItem(player.PlayerName))
+                    {
+                        if (ImGui.BeginTable($"PlayerRounds{player.PlayerName}", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+                        {
+                            ImGui.TableSetupColumn("Round", ImGuiTableColumnFlags.WidthFixed, 60);
+                            ImGui.TableSetupColumn("Throw 1", ImGuiTableColumnFlags.WidthFixed, 100);
+                            ImGui.TableSetupColumn("Throw 2", ImGuiTableColumnFlags.WidthFixed, 100);
+                            ImGui.TableSetupColumn("Throw 3", ImGuiTableColumnFlags.WidthFixed, 100);
+                            ImGui.TableSetupColumn("Round Total", ImGuiTableColumnFlags.WidthStretch);
+
+                            ImGui.TableHeadersRow();
+
+                            foreach (var round in player.Rounds)
+                            {
+                                ImGui.TableNextRow();
+
+                                ImGui.TableSetColumnIndex(0);
+                                ImGui.TextUnformatted($"#{round.RoundNumber}");
+
+                                for (int i = 0; i < 3 && i < round.Throws.Count; i++)
+                                {
+                                    ImGui.TableSetColumnIndex(i + 1);
+                                    var throwResult = round.Throws[i];
+                                    ImGui.TextUnformatted($"{throwResult.Score}");
+                                    if (ImGui.IsItemHovered())
+                                    {
+                                        ImGui.BeginTooltip();
+                                        ImGui.TextUnformatted($"{throwResult.Roll1}-{throwResult.Roll2}-{throwResult.Roll3}");
+                                        ImGui.TextUnformatted(throwResult.Description);
+                                        ImGui.EndTooltip();
+                                    }
+                                }
+
+                                ImGui.TableSetColumnIndex(4);
+                                ImGui.TextColored(new Vector4(0.3f, 0.8f, 1.0f, 1.0f), round.RoundScore.ToString());
+                            }
+
+                            ImGui.EndTable();
+                        }
+
+                        ImGui.EndTabItem();
+                    }
+                }
+
+                ImGui.EndTabBar();
+            }
+        }
     }
 }
